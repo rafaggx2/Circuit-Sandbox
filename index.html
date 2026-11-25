@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Circuit Sandbox</title>
+<style>
+:root{--sky:#86b3e6;--grass:#5b9a3a;--paper:#f4efdb;--edge:#f7f0c6;--ink:#3b362c;--grid:rgba(110,100,70,.16);--gridM:rgba(110,100,70,.32);--acc:#4f9bc7;--btn:#ebe4c6;--btnH:#ddd4a8;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--sky:#1c2a44;--grass:#1f3a22;--paper:#16283f;--edge:#25405f;--ink:#d8e6f2;--grid:rgba(150,190,230,.12);--gridM:rgba(150,190,230,.26);--acc:#79c0ee;--btn:#1f3652;--btnH:#2c4a6e}}
+:root[data-theme="dark"]{--sky:#1c2a44;--grass:#1f3a22;--paper:#16283f;--edge:#25405f;--ink:#d8e6f2;--grid:rgba(150,190,230,.12);--gridM:rgba(150,190,230,.26);--acc:#79c0ee;--btn:#1f3652;--btnH:#2c4a6e}
+html,body{height:100%;margin:0}
+body{background:linear-gradient(var(--sky) 0 58%,var(--grass) 58%);display:flex;align-items:center;justify-content:center;font-family:"Segoe Print","Bradley Hand","Comic Sans MS",system-ui,sans-serif;color:var(--ink)}
+.frame{display:flex;width:min(1180px,96vw);height:min(780px,94%);background:var(--paper);border:8px solid var(--edge);border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.35);overflow:hidden}
+#bar{width:128px;flex:none;overflow-y:auto;padding:8px;display:grid;grid-template-columns:1fr 1fr;gap:6px;align-content:start;border-right:1px dashed var(--gridM)}
+.t{background:var(--btn);border:1.5px solid var(--gridM);border-radius:8px;color:var(--ink);padding:3px 0 2px;display:flex;flex-direction:column;align-items:center;font:10px system-ui,sans-serif;cursor:pointer}
+.t.on{outline:2px solid var(--acc);background:var(--btnH)}
+.t canvas{width:48px;height:34px}
+#stage{flex:1;min-width:0;display:flex;flex-direction:column;position:relative}
+#top{display:flex;align-items:center;gap:6px;padding:6px 10px;flex-wrap:wrap}
+#top h1{font-size:17px;margin:0 auto 0 0}
+#top button,#top select{background:var(--btn);color:var(--ink);border:1.5px solid var(--gridM);border-radius:8px;padding:5px 10px;font:12px system-ui,sans-serif;cursor:pointer}
+#c{flex:1;min-height:0;width:100%;display:block;touch-action:none}
+#info{position:absolute;right:12px;bottom:8px;font:12px "Courier New",monospace;pointer-events:none}
+#hint{position:absolute;left:12px;bottom:8px;font:11px system-ui,sans-serif;opacity:.6;pointer-events:none;max-width:60%}
+@media(max-width:700px){.frame{flex-direction:column}#bar{width:auto;display:flex;overflow-x:auto;border-right:0;border-bottom:1px dashed var(--gridM)}.t{flex:0 0 56px}#hint{display:none}}
+</style></head><body>
+<div class="frame"><div id="bar"></div>
+<div id="stage"><div id="top"><h1>⚡ Circuit Sandbox</h1>
+<select id="ex"><option value="">Examples…</option><option value="0">LED + switch</option><option value="1">Motor with meters</option><option value="2">RC charging</option></select>
+<button id="run">Pause</button><button id="clr">Clear</button></div>
+<canvas id="c"></canvas><div id="hint">Wire: drag · Parts: click an edge · R rotates · wheel edits values or LED/bulb colour · click an LED/bulb with Interact to cycle colour · right-click erases</div><div id="info"></div></div></div>
+<script>
+const S=40,DEF={
+battery:{n:'Battery',v:[1.5,3,4.5,9,12,24],i:3,u:'V'},
+resistor:{n:'Resistor',v:[10,22,47,100,220,330,470,1e3,2.2e3,4.7e3,1e4,1e5],i:5,u:'Ω'},
+capacitor:{n:'Capacitor',v:[1e-4,4.7e-4,1e-3,4.7e-3,1e-2],i:2,u:'F'},
+inductor:{n:'Inductor',v:[1,10,100],i:1,u:'H'},
+diode:{n:'Diode'},led:{n:'LED'},bulb:{n:'Bulb'},switch:{n:'Switch'},button:{n:'Button'},motor:{n:'Motor'},voltmeter:{n:'Voltmeter'},ammeter:{n:'Ammeter'},wire:{n:'Wire'}};
+const COLS=[['Red','255,50,45'],['Green','50,225,85'],['Blue','60,125,255'],['Yellow','255,220,40'],['White','255,252,240'],['Orange','255,145,35'],['Warm','255,196,80']];
+const TOOLS=[['select','Interact'],['wire','Wire'],['erase','Erase'],...Object.keys(DEF).filter(k=>k!='wire').map(k=>[k,DEF[k].n])];
+const cv=document.getElementById('c'),ctx=cv.getContext('2d'),root=document.documentElement;
+let els=[],map=new Map(),W=0,H=0,cols=1,rows=1,ox=0,oy=0,dpr=1,running=true,tool='select',flip=false,drag=null,last=null,pressed=null,mp=[-99,-99];
+const key=(a,b,c,d)=>(a>c||(a==c&&b>d))?`${c},${d},${a},${b}`:`${a},${b},${c},${d}`;
+const val=e=>DEF[e.t].v&&DEF[e.t].v[e.vi];
+const px=x=>ox+x*S,py=y=>oy+y*S;
+function rm(a,b,c,d){const k=key(a,b,c,d),e=map.get(k);if(e){els.splice(els.indexOf(e),1);map.delete(k)}}
+function add(t,x1,y1,x2,y2,o={}){rm(x1,y1,x2,y2);const e={t,x1,y1,x2,y2,vi:o.vi!=null?o.vi:(DEF[t].i||0),col:o.col!=null?o.col:(t=='bulb'?6:0),on:!!o.on,vc:0,i:0,vd:0,ph:0,ang:0,I:0,dv:0,br:0,dead:false};
+if(o.flip){e.x1=x2;e.y1=y2;e.x2=x1;e.y2=y1}map.set(key(x1,y1,x2,y2),e);els.push(e);return e}
+function fmt(x,u){const a=Math.abs(x);if(a<1e-12)return '0 '+u;for(const[s,f]of[[1e6,'M'],[1e3,'k'],[1,''],[1e-3,'m']])if(a>=s*.9995)return +(x/s).toPrecision(3)+' '+f+u;return +(x/1e-6).toPrecision(3)+' µ'+u}
+/* ---------- solver ---------- */
+function gauss(A,b,n){for(let c=0;c<n;c++){let p=c,m=Math.abs(A[c*n+c]);for(let r=c+1;r<n;r++){const v=Math.abs(A[r*n+c]);if(v>m){m=v;p=r}}
+if(p!=c){for(let k=c;k<n;k++){const t=A[c*n+k];A[c*n+k]=A[p*n+k];A[p*n+k]=t}const t=b[c];b[c]=b[p];b[p]=t}
+for(let r=c+1;r<n;r++){const f=A[r*n+c]/A[c*n+c];if(!f)continue;for(let k=c;k<n;k++)A[r*n+k]-=f*A[c*n+k];b[r]-=f*b[c]}}
+const x=new Float64Array(n);for(let r=n-1;r>=0;r--){let s=b[r];for(let k=r+1;k<n;k++)s-=A[r*n+k]*x[k];x[r]=s/A[r*n+r]}return x}
+const isW=e=>e.t=='wire'||((e.t=='switch'||e.t=='button')&&e.on);
+function solve(dt){
+const P=new Map(),find=a=>{if(!P.has(a))P.set(a,a);let r=a;while(P.get(r)!==r)r=P.get(r);while(P.get(a)!==r){const n=P.get(a);P.set(a,r);a=n}return r};
+for(const e of els){e.a=e.y1*512+e.x1;e.b=e.y2*512+e.x2;find(e.a);find(e.b);if(isW(e))P.set(find(e.a),find(e.b))}
+const idx=new Map();let n=0;const net=a=>{const r=find(a);if(!idx.has(r))idx.set(r,n++);return idx.get(r)};
+const act=[];for(const e of els){e.na=net(e.a);e.nb=net(e.b);e.I=0;if(!isW(e))act.push(e)}
+if(!n)return;
+const A=new Float64Array(n*n),z=new Float64Array(n);let V=new Float64Array(n);
+const nl=act.some(e=>e.t=='diode'||e.t=='led');
+for(let it=0;it<(nl?60:1);it++){A.fill(0);z.fill(0);for(let i=0;i<n;i++)A[i*n+i]=1e-9;
+for(const e of act){let g=0,q=0;const v=val(e);
+switch(e.t){case'resistor':g=1/v;break;case'bulb':g=1/60;break;case'motor':g=1/20;break;case'ammeter':g=100;break;case'voltmeter':g=1e-6;break;
+case'battery':g=1;q=v;break;case'capacitor':g=v/dt;q=-g*e.vc;break;case'inductor':g=dt/v;q=e.i;break;
+case'diode':case'led':if(!e.dead){const ns=e.t=='led'?.0517:.0259,Is=e.t=='led'?1e-18:1e-12,ex=Math.exp(Math.min(e.vd/ns,40));g=Is/ns*ex+1e-9;q=Is*(ex-1)-g*e.vd}}
+e.g=g;e.q=q;const a=e.na,b=e.nb;A[a*n+a]+=g;A[b*n+b]+=g;A[a*n+b]-=g;A[b*n+a]-=g;z[a]-=q;z[b]+=q}
+V=gauss(A,z,n);if(!V.every(Number.isFinite))V=new Float64Array(n);
+if(!nl)break;let mx=0;for(const e of act)if(e.t=='diode'||e.t=='led'){const dv=V[e.na]-V[e.nb];mx=Math.max(mx,Math.abs(dv-e.vd));e.vd=Math.min(3,Math.min(dv,e.vd+.1))}
+if(mx<1e-6)break}
+for(const e of act){const dv=V[e.na]-V[e.nb];e.dv=dv;e.I=e.g*dv+e.q;
+if(e.t=='capacitor')e.vc=dv;if(e.t=='inductor')e.i=e.I;
+if(e.t=='led'){if(e.I>.1)e.dead=true;e.br+=(Math.min(1,Math.max(0,e.I)/.015)-e.br)*.3}
+if(e.t=='bulb')e.br+=(Math.min(1,dv*dv/60/.7)-e.br)*.2;if(e.t=='motor')e.ang+=e.I*60*dt}
+/* wire currents via spanning-tree peeling */
+const adj=new Map(),out=new Map();
+for(const e of els)if(isW(e)){for(const[u,v]of[[e.a,e.b],[e.b,e.a]]){if(!adj.has(u))adj.set(u,[]);adj.get(u).push([e,v])}}
+for(const e of act){out.set(e.a,(out.get(e.a)||0)+e.I);out.set(e.b,(out.get(e.b)||0)-e.I)}
+const seen=new Set();
+for(const s of adj.keys()){if(seen.has(s))continue;const order=[s],pe=new Map();seen.add(s);
+for(let i=0;i<order.length;i++)for(const[e,v]of adj.get(order[i]))if(!seen.has(v)){seen.add(v);pe.set(v,[e,order[i]]);order.push(v)}
+const sub=new Map();for(let i=order.length-1;i>=0;i--){const v=order[i],t=(sub.get(v)||0)+(out.get(v)||0);if(pe.has(v)){const[e,u]=pe.get(v);e.I=e.a==u?t:-t;sub.set(u,(sub.get(u)||0)+t)}}}
+for(const e of els){const a=Math.abs(e.I);e.ph+=a>1e-5?Math.sign(e.I)*(.4+Math.min(1.6,Math.log10(a*1e5)*.4))*dt:0}}
+/* ---------- symbols ---------- */
+function sym(c,t,e,ink){c.strokeStyle=ink;c.fillStyle=ink;c.lineWidth=2.5;c.lineCap='round';c.lineJoin='round';
+const L=(a,b,d,f)=>{c.beginPath();c.moveTo(a,b);c.lineTo(d,f);c.stroke()},lead=h=>{L(-20,0,-h,0);L(h,0,20,0)},circ=(x,y,r)=>{c.beginPath();c.arc(x,y,r,0,7);c.stroke()};
+const txt=s=>{c.save();c.rotate(-(e.rot||0));c.font='bold 13px Georgia,serif';c.textAlign='center';c.textBaseline='middle';c.fillText(s,0,1);c.restore()};
+const cc=COLS[e.col!=null?e.col:(t=='bulb'?6:0)][1],br=e.br||0;
+if((t=='led'||t=='bulb')&&br>.02){const g=c.createRadialGradient(0,0,2,0,0,40);g.addColorStop(0,`rgba(${cc},${.95*br})`);g.addColorStop(.35,`rgba(${cc},${.4*br})`);g.addColorStop(1,`rgba(${cc},0)`);c.fillStyle=g;c.fillRect(-42,-42,84,84);c.fillStyle=ink}
+switch(t){
+case'wire':L(-20,0,20,0);break;
+case'battery':lead(4);L(-4,-7,-4,7);L(4,-13,4,13);break;
+case'resistor':lead(12);c.beginPath();c.moveTo(-12,0);for(let i=0;i<6;i++)c.lineTo(-12+(i+.5)*4,i%2?6:-6);c.lineTo(12,0);c.stroke();break;
+case'capacitor':lead(3);L(-3,-10,-3,10);L(3,-10,3,10);break;
+case'inductor':lead(12);for(let i=0;i<3;i++){c.beginPath();c.arc(-8+i*8,0,4,Math.PI,0);c.stroke()}break;
+case'diode':case'led':lead(6);c.beginPath();c.moveTo(-6,-8);c.lineTo(-6,8);c.lineTo(6,0);c.closePath();
+if(t=='led'){c.save();c.fillStyle=`rgba(${cc},${.3+.7*br})`;c.fill();c.restore()}c.stroke();L(6,-8,6,8);
+if(t=='led'){c.save();c.lineWidth=1.5;c.globalAlpha=.5;circ(0,0,13);c.restore();c.lineWidth=1.8;L(1,-15,6,-20);L(6,-14,11,-19)}
+if(e.dead){c.strokeStyle='#d33';L(-9,-9,9,9);L(9,-9,-9,9)}break;
+case'bulb':lead(12);c.save();c.fillStyle=`rgba(${cc},${.14+.7*br})`;c.beginPath();c.arc(0,0,12,0,7);c.fill();c.restore();circ(0,0,12);
+c.save();c.lineWidth=2;c.beginPath();c.moveTo(-9,0);c.lineTo(-6,-5);c.lineTo(-2,5);c.lineTo(2,-5);c.lineTo(6,5);c.lineTo(9,0);
+if(br>.05){c.strokeStyle=`rgb(${cc})`;c.shadowColor=`rgb(${cc})`;c.shadowBlur=14*br;c.lineWidth=2.6}c.stroke();c.restore();break;
+case'switch':lead(10);circ(-10,0,2.5);circ(10,0,2.5);e.on?L(-10,0,10,0):L(-10,0,8,-12);break;
+case'button':lead(9);const y=e.on?-2:-10;L(-9,y,9,y);L(0,y,0,y-8);circ(-9,0,2);circ(9,0,2);break;
+case'motor':lead(12);circ(0,0,12);for(let k=0;k<3;k++){const a=(e.ang||0)+k*2.0944;L(0,0,Math.cos(a)*9,Math.sin(a)*9)}break;
+case'voltmeter':lead(12);circ(0,0,12);txt('V');break;
+case'ammeter':lead(12);circ(0,0,12);txt('A');break}}
+/* ---------- drawing ---------- */
+const cssv=n=>getComputedStyle(root).getPropertyValue(n).trim();
+function edgeAt(mx,my){const gx=(mx-ox)/S,gy=(my-oy)/S,rx=Math.round(gx),ry=Math.round(gy);let x1,y1,x2,y2;
+if(Math.abs(gy-ry)<=Math.abs(gx-rx)){x1=Math.floor(gx);y1=ry;x2=x1+1;y2=ry}else{x1=rx;y1=Math.floor(gy);x2=rx;y2=y1+1}
+return(x1<0||y1<0||x2>cols||y2>rows)?null:[x1,y1,x2,y2]}
+function label(e){const v=val(e);if(e.t=='voltmeter')return fmt(e.dv,'V');if(e.t=='ammeter')return fmt(e.I,'A');return v!=null?fmt(v,DEF[e.t].u):''}
+function draw(){const ink=cssv('--ink'),acc=cssv('--acc'),gr=cssv('--grid'),gm=cssv('--gridM');
+ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W,H);ctx.lineWidth=1;
+for(let x=-Math.ceil(ox/S);px(x)<=W;x++){ctx.strokeStyle=((x%4)+4)%4?gr:gm;ctx.beginPath();ctx.moveTo(px(x),0);ctx.lineTo(px(x),H);ctx.stroke()}
+for(let y=-Math.ceil(oy/S);py(y)<=H;y++){ctx.strokeStyle=((y%4)+4)%4?gr:gm;ctx.beginPath();ctx.moveTo(0,py(y));ctx.lineTo(W,py(y));ctx.stroke()}
+const deg=new Map(),he=edgeAt(mp[0],mp[1]),hx=he&&map.get(key(...he));
+for(const e of els){const ax=px(e.x1),ay=py(e.y1),bx=px(e.x2),by=py(e.y2);
+for(const k of[e.y1*512+e.x1,e.y2*512+e.x2])deg.set(k,(deg.get(k)||0)+1);
+ctx.save();ctx.translate((ax+bx)/2,(ay+by)/2);e.rot=Math.atan2(by-ay,bx-ax);ctx.rotate(e.rot);sym(ctx,e.t,e,ink);ctx.restore();
+const lb=label(e);if(lb){ctx.fillStyle=ink;ctx.font='12px "Courier New",monospace';ctx.textBaseline='middle';
+if(e.y1==e.y2){ctx.textAlign='center';ctx.fillText(lb,(ax+bx)/2,ay-22)}else{ctx.textAlign='left';ctx.fillText(lb,ax+14,(ay+by)/2)}}}
+for(const[k,d]of deg)if(d>=3){ctx.fillStyle=ink;ctx.beginPath();ctx.arc(ox+(k%512)*S,oy+Math.floor(k/512)*S,4.5,0,7);ctx.fill()}
+ctx.fillStyle=acc;
+for(const e of els){if(Math.abs(e.I)<1e-5)continue;const ax=px(e.x1),ay=py(e.y1),bx=px(e.x2),by=py(e.y2),w=e.t=='wire'||isW(e),t=((e.ph%1)+1)%1;
+if(!w&&t>.28&&t<.72)continue;ctx.save();ctx.translate(ax+(bx-ax)*t,ay+(by-ay)*t);ctx.rotate(e.rot+(e.I<0?Math.PI:0));
+ctx.beginPath();ctx.moveTo(6,0);ctx.lineTo(-4,-4.5);ctx.lineTo(-4,4.5);ctx.fill();ctx.restore()}
+if(he&&(tool!='select'||hx)&&tool!='wire'){const[x1,y1,x2,y2]=he;ctx.strokeStyle=acc;ctx.globalAlpha=.3;ctx.lineWidth=9;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(px(x1),py(y1));ctx.lineTo(px(x2),py(y2));ctx.stroke();ctx.globalAlpha=1;
+ctx.fillStyle=acc;for(const[x,y]of[[x1,y1],[x2,y2]])ctx.fillRect(px(x)-4,py(y)-4,8,8);
+if(DEF[tool]&&tool!='wire'){ctx.save();ctx.globalAlpha=.55;ctx.translate((px(x1)+px(x2))/2,(py(y1)+py(y2))/2);ctx.rotate((y1==y2?0:Math.PI/2)+(flip?Math.PI:0));sym(ctx,tool,{rot:0},ink);ctx.restore()}}
+if(tool=='wire'){const x=Math.max(0,Math.min(cols,Math.round((mp[0]-ox)/S))),y=Math.max(0,Math.min(rows,Math.round((mp[1]-oy)/S)));ctx.fillStyle=acc;ctx.fillRect(px(x)-4,py(y)-4,8,8)}
+document.getElementById('info').textContent=hx?`${DEF[hx.t].n}${hx.t=='led'||hx.t=='bulb'?' ('+COLS[hx.col][0]+')':''}${val(hx)!=null?' '+fmt(val(hx),DEF[hx.t].u):''} · V=${fmt(hx.dv,'V')} · I=${fmt(hx.I,'A')}${hx.dead?' · BLOWN (click)':''}`:''}
+/* ---------- interaction ---------- */
+const pos=ev=>{const r=cv.getBoundingClientRect();return[ev.clientX-r.left,ev.clientY-r.top]};
+const snap=m=>[Math.max(0,Math.min(cols,Math.round((m[0]-ox)/S))),Math.max(0,Math.min(rows,Math.round((m[1]-oy)/S)))];
+function walk(p){while(last[0]!=p[0]||last[1]!=p[1]){let nx=last[0],ny=last[1];if(nx!=p[0])nx+=Math.sign(p[0]-nx);else ny+=Math.sign(p[1]-ny);
+if(!map.has(key(last[0],last[1],nx,ny)))add('wire',last[0],last[1],nx,ny);last=[nx,ny]}}
+function inter(e){if(e.t=='switch')e.on=!e.on;else if(e.t=='button'){e.on=true;pressed=e}else if(e.dead){e.dead=false;e.vd=0}else if(tool=='select'&&(e.t=='led'||e.t=='bulb'))e.col=(e.col+1)%COLS.length;else if(tool==e.t){[e.x1,e.y1,e.x2,e.y2]=[e.x2,e.y2,e.x1,e.y1]}}
+cv.addEventListener('contextmenu',e=>e.preventDefault());
+cv.addEventListener('pointerdown',ev=>{cv.setPointerCapture(ev.pointerId);mp=pos(ev);const ed=edgeAt(...mp),ex=ed&&map.get(key(...ed));
+if(ev.button==2||tool=='erase'){drag='erase';if(ed)rm(...ed);return}
+if(tool=='wire'){drag='wire';last=snap(mp);return}
+if(ex&&(tool=='select'||ex.t==tool)){inter(ex);return}
+if(ed&&tool!='select')add(tool,...ed,{flip})});
+cv.addEventListener('pointermove',ev=>{mp=pos(ev);if(drag=='wire')walk(snap(mp));else if(drag=='erase'){const ed=edgeAt(...mp);if(ed)rm(...ed)}});
+const up=()=>{drag=null;if(pressed){pressed.on=false;pressed=null}};
+cv.addEventListener('pointerup',up);cv.addEventListener('pointercancel',up);cv.addEventListener('pointerleave',()=>{if(!drag)mp=[-99,-99]});
+cv.addEventListener('wheel',ev=>{const ed=edgeAt(...pos(ev)),e=ed&&map.get(key(...ed));if(e&&DEF[e.t].v){ev.preventDefault();e.vi=Math.max(0,Math.min(DEF[e.t].v.length-1,e.vi+(ev.deltaY<0?1:-1)))}else if(e&&(e.t=='led'||e.t=='bulb')){ev.preventDefault();e.col=(e.col+(ev.deltaY<0?1:COLS.length-1))%COLS.length}},{passive:false});
+addEventListener('keydown',ev=>{if(ev.key=='r'||ev.key=='R'){const ed=edgeAt(...mp),e=ed&&map.get(key(...ed));if(e&&tool=='select')[e.x1,e.y1,e.x2,e.y2]=[e.x2,e.y2,e.x1,e.y1];else flip=!flip}
+if(ev.key=='Escape')setTool('select')});
+/* ---------- UI ---------- */
+const bar=document.getElementById('bar'),icons=[];
+function setTool(t){tool=t;[...bar.children].forEach(b=>b.classList.toggle('on',b.dataset.t==t))}
+for(const[k,n]of TOOLS){const b=document.createElement('button');b.className='t';b.dataset.t=k;b.title=n;const c=document.createElement('canvas');c.width=96;c.height=68;b.append(c,n);b.onclick=()=>setTool(k);bar.append(b);icons.push([c,k])}
+function drawIcons(){const ink=cssv('--ink');for(const[c,k]of icons){const x=c.getContext('2d');x.setTransform(2,0,0,2,0,0);x.clearRect(0,0,48,34);x.translate(24,17);x.lineWidth=2.5;x.lineCap='round';
+if(k=='select'){x.fillStyle=ink;x.beginPath();x.moveTo(-6,-10);x.lineTo(-6,8);x.lineTo(-2,4);x.lineTo(2,11);x.lineTo(5,9);x.lineTo(1,3);x.lineTo(7,3);x.closePath();x.fill()}
+else if(k=='erase'){x.strokeStyle=ink;x.beginPath();x.moveTo(-8,-8);x.lineTo(8,8);x.moveTo(8,-8);x.lineTo(-8,8);x.stroke()}
+else sym(x,k,{rot:0,on:k=='switch'},ink)}}
+drawIcons();matchMedia('(prefers-color-scheme: dark)').addEventListener('change',drawIcons);setTool('select');
+document.getElementById('run').onclick=e=>{running=!running;e.target.textContent=running?'Pause':'Resume'};
+document.getElementById('clr').onclick=()=>{els=[];map.clear()};
+function loop(x,y,w,h,spec){const p=[];for(let i=0;i<w;i++)p.push([x+i,y]);for(let i=0;i<h;i++)p.push([x+w,y+i]);for(let i=0;i<w;i++)p.push([x+w-i,y+h]);for(let i=0;i<h;i++)p.push([x,y+h-i]);
+p.forEach((a,i)=>{const b=p[(i+1)%p.length],s=spec[i];const[t,vi,on]=Array.isArray(s)?s:[s||'wire'];add(t,a[0],a[1],b[0],b[1],{vi,on})})}
+function preset(n){els=[];map.clear();const x=Math.max(1,Math.floor(cols/2)-3);
+if(n==0)loop(x,3,6,4,{2:['switch',0,1],4:'led',8:'resistor',18:'battery'});
+if(n==1){loop(x,3,6,4,{1:'ammeter',3:'motor',7:'button',18:['battery',3]});add('wire',x+3,3,x+3,2);add('wire',x+4,3,x+4,2);add('voltmeter',x+3,2,x+4,2)}
+if(n==2){loop(x,3,6,4,{2:['switch',0,1],4:['resistor',7],8:'capacitor',18:'battery'});add('wire',x+6,5,x+7,5);add('wire',x+6,6,x+7,6);add('voltmeter',x+7,5,x+7,6)}}
+document.getElementById('ex').onchange=e=>{if(e.target.value!=='')preset(+e.target.value);e.target.value=''};
+function resize(){dpr=devicePixelRatio||1;W=cv.clientWidth;H=cv.clientHeight;cv.width=W*dpr;cv.height=H*dpr;cols=Math.max(4,Math.floor(W/S)-1);rows=Math.max(4,Math.floor(H/S)-1);ox=(W-cols*S)/2;oy=(H-rows*S)/2}
+addEventListener('resize',resize);resize();preset(0);
+let tl=performance.now();(function f(t){const dt=Math.min(.03,(t-tl)/1000||.016);tl=t;if(running)solve(dt);draw();requestAnimationFrame(f)})(tl);
+</script></body></html>
